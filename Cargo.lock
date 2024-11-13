@@ -2146,12 +2146,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "castaway"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2698f953def977c68f935bb0dfa959375ad4638570e969e2f1e9f433cbf1af6"
-
-[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3411,36 +3405,6 @@ checksum = "90eeab0aa92f3f9b4e87f258c72b139c207d251f9cbc1080a0086b86a8870dd3"
 dependencies = [
  "nix",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "curl"
-version = "0.4.47"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9fb4d13a1be2b58f14d60adba57c9834b78c62fd86c3e76a148f732686e9265"
-dependencies = [
- "curl-sys",
- "libc",
- "openssl-probe",
- "openssl-sys",
- "schannel",
- "socket2 0.5.7",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "curl-sys"
-version = "0.4.77+curl-8.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f469e8a5991f277a208224f6c7ad72ecb5f986e36d09ae1f2c1bb9259478a480"
-dependencies = [
- "cc",
- "libc",
- "libz-sys",
- "openssl-sys",
- "pkg-config",
- "vcpkg",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6200,35 +6164,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
-name = "isahc"
-version = "1.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "334e04b4d781f436dc315cb1e7515bd96826426345d498149e4bde36b67f8ee9"
-dependencies = [
- "async-channel 1.9.0",
- "castaway",
- "crossbeam-utils",
- "curl",
- "curl-sys",
- "encoding_rs",
- "event-listener 2.5.3",
- "futures-lite 1.13.0",
- "http 0.2.12",
- "log",
- "mime",
- "once_cell",
- "polling 2.8.0",
- "serde",
- "serde_json",
- "slab",
- "sluice",
- "tracing",
- "tracing-futures",
- "url",
- "waker-fn",
-]
-
-[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6727,7 +6662,6 @@ dependencies = [
 [[package]]
 name = "libwebrtc"
 version = "0.3.4"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "cxx",
  "jni",
@@ -6815,13 +6749,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes 1.7.2",
  "collections",
  "core-foundation 0.9.4",
  "cpal 0.15.3 (git+https://github.com/zed-industries/cpal?rev=fd8bc2fd39f1f5fdee5a0690656caff9a26d9d50)",
  "futures 0.3.30",
  "gpui",
+ "http 0.2.12",
+ "http_client",
  "live_kit_server",
  "livekit",
+ "livekit-api",
  "log",
  "media",
  "nanoid",
@@ -6852,7 +6790,6 @@ dependencies = [
 [[package]]
 name = "livekit"
 version = "0.4.1"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "futures-util",
  "lazy_static",
@@ -6872,12 +6809,12 @@ dependencies = [
 [[package]]
 name = "livekit-api"
 version = "0.3.4"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "async-tungstenite 0.25.1",
+ "base64 0.21.7",
  "futures-util",
  "http 0.2.12",
- "isahc",
+ "jsonwebtoken",
  "livekit-protocol",
  "livekit-runtime",
  "log",
@@ -6886,6 +6823,7 @@ dependencies = [
  "reqwest 0.11.27",
  "scopeguard",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "tokio",
@@ -6896,7 +6834,6 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.3.4"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "futures-util",
  "livekit-runtime",
@@ -6913,7 +6850,6 @@ dependencies = [
 [[package]]
 name = "livekit-runtime"
 version = "0.3.0"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "async-io 2.3.4",
  "async-std",
@@ -11403,17 +11339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sluice"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d7400c0eff44aa2fcb5e31a5f24ba9716ed90138769e4977a2ba6014ae63eb5"
-dependencies = [
- "async-channel 1.9.0",
- "futures-core",
- "futures-io",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12883,9 +12808,10 @@ checksum = "212d5dcb2a1ce06d81107c3d0ffa3121fe974b73f068c8282cb1c32328113b6c"
 dependencies = [
  "futures-util",
  "log",
- "native-tls",
+ "rustls 0.21.12",
+ "rustls-native-certs 0.6.3",
  "tokio",
- "tokio-native-tls",
+ "tokio-rustls 0.24.1",
  "tungstenite 0.20.1",
 ]
 
@@ -13100,16 +13026,6 @@ checksum = "c06d3da6113f116aaee68e4d601191614c9053067f9ab7f6edbcb161237daa54"
 dependencies = [
  "once_cell",
  "valuable",
-]
-
-[[package]]
-name = "tracing-futures"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
-dependencies = [
- "pin-project",
- "tracing",
 ]
 
 [[package]]
@@ -13402,8 +13318,8 @@ dependencies = [
  "http 0.2.12",
  "httparse",
  "log",
- "native-tls",
  "rand 0.8.5",
+ "rustls 0.21.12",
  "sha1",
  "thiserror",
  "url",
@@ -14490,7 +14406,6 @@ checksum = "5f20c57d8d7db6d3b86154206ae5d8fba62dd39573114de97c2cb0578251f8e1"
 [[package]]
 name = "webrtc-sys"
 version = "0.3.2"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "cc",
  "cxx",
@@ -14503,7 +14418,6 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.2"
-source = "git+https://github.com/livekit/rust-sdks?rev=16895453107ed653564b9b40b903a9c8b8b1ad93#16895453107ed653564b9b40b903a9c8b8b1ad93"
 dependencies = [
  "fs2",
  "regex",

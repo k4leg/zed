@@ -7,10 +7,10 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait as _},
     StreamConfig,
 };
-use futures::{Stream, StreamExt as _};
+use futures::{io, Stream, StreamExt as _};
 use gpui::{AppContext, ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream, Task};
 use parking_lot::Mutex;
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, future::Future, pin::Pin, sync::Arc};
 use util::{ResultExt as _, TryFutureExt};
 use webrtc::{
     audio_frame::AudioFrame,
@@ -21,10 +21,11 @@ use webrtc::{
     video_stream::native::NativeVideoStream,
 };
 
-#[cfg(all(not(any(test, feature = "test-support")), not(target_os = "windows")))]
+// FIXME
+// #[cfg(all(not(any(test, feature = "test-support")), not(target_os = "windows")))]
 pub use livekit::*;
-#[cfg(any(test, feature = "test-support", target_os = "windows"))]
-pub use test::*;
+// #[cfg(any(test, feature = "test-support", target_os = "windows"))]
+// pub use test::*;
 
 pub use remote_video_track_view::{RemoteVideoTrackView, RemoteVideoTrackViewEvent};
 
@@ -48,8 +49,61 @@ impl livekit::dispatcher::Dispatcher for Dispatcher {
     }
 }
 
-pub fn init(dispatcher: Arc<dyn gpui::PlatformDispatcher>) {
+struct HttpClientAdapter(Arc<dyn http_client::HttpClient>);
+
+impl livekit_api::HttpClient for HttpClientAdapter {
+    fn get(
+        &self,
+        url: &str,
+    ) -> Pin<Box<dyn Future<Output = io::Result<livekit_api::Response>> + Send>> {
+        Box::pin(async move {
+            let response = self
+                .0
+                .get(url, http_client::AsyncBody::empty(), false)
+                .await
+                .map_err(Into::into)?;
+            Ok(livekit_api::Response {
+                body: Box::pin(response.body()),
+                status: http::StatusCode::from_u16(response.status().as_u16())
+                    .map_err(Into::into)?,
+            })
+        })
+    }
+
+    fn send_async(
+        &self,
+        request: http::Request<Vec<u8>>,
+    ) -> Pin<Box<dyn Future<Output = io::Result<livekit_api::Response>> + Send>> {
+        Box::pin(async move {
+            let response = self
+                .0
+                .send(http_client::Request::from_parts(
+                    http_client::Parts {
+                        method: request.method(),
+                        uri: request.uri(),
+                        headers: request.headers(),
+                        extensions: request.extensions(),
+                    },
+                    http_client::AsyncBody::from_bytes(request.body().into()),
+                ))
+                .await
+                .map_err(Into::into)?;
+            // FIXME: factor out util
+            Ok(livekit_api::Response {
+                body: Box::pin(response.body()),
+                status: http::StatusCode::from_u16(response.status().as_u16())
+                    .map_err(Into::into)?,
+            })
+        })
+    }
+}
+
+pub fn init(
+    dispatcher: Arc<dyn gpui::PlatformDispatcher>,
+    http_client: Arc<dyn http_client::HttpClient>,
+) {
     livekit::dispatcher::set_dispatcher(Dispatcher(dispatcher));
+    livekit::set_http_client(HttpClientAdapter(http_client));
 }
 
 pub async fn capture_local_video_track(

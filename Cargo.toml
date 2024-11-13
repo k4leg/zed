@@ -303,6 +303,10 @@ worktree = { path = "crates/worktree" }
 zed = { path = "crates/zed" }
 zed_actions = { path = "crates/zed_actions" }
 
+# FIXME
+livekit = { path = "../livekit-rust-sdks/livekit", features = ["dispatcher", "services-dispatcher", "rustls-tls-native-roots", ], default-features = false }
+livekit-api = { path = "../livekit-rust-sdks/livekit-api" }
+
 #
 # External crates
 #
@@ -359,6 +363,8 @@ heed = { version = "0.20.1", features = ["read-txn-no-tls"] }
 hex = "0.4.3"
 html5ever = "0.27.0"
 hyper = "0.14"
+# FIXME
+http = "0.2.1"
 ignore = "0.4.22"
 image = "0.25.1"
 indexmap = { version = "1.6.2", features = ["serde"] }
@@ -367,7 +373,8 @@ itertools = "0.13.0"
 jsonwebtoken = "9.3"
 libc = "0.2"
 linkify = "0.10.0"
-livekit = { git = "https://github.com/livekit/rust-sdks", rev = "16895453107ed653564b9b40b903a9c8b8b1ad93", features = ["dispatcher", "native-tls"], default-features = false }
+# FIXME
+# livekit = { git = "https://github.com/livekit/rust-sdks", rev = "10e90086c4b0cc86cf56bb2d16724df6bf58f8b2", features = ["dispatcher", "rustls-tls-native-roots"], default-features = false }
 log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
 markup5ever_rcdom = "0.3.0"
 nanoid = "0.4"
