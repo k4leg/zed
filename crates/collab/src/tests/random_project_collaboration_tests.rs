@@ -1323,7 +1323,10 @@ impl RandomizedTest for ProjectCollaborationTest {
                     match (host_file, guest_file) {
                         (Some(host_file), Some(guest_file)) => {
                             assert_eq!(guest_file.path(), host_file.path());
-                            assert_eq!(guest_file.is_deleted(), host_file.is_deleted());
+                            assert_eq!(
+                                guest_file.persistence_state(),
+                                host_file.persistence_state()
+                            );
                             assert_eq!(
                                 guest_file.mtime(),
                                 host_file.mtime(),

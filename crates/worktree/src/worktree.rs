@@ -29,6 +29,7 @@ use gpui::{
     Task,
 };
 use ignore::IgnoreStack;
+use language::PersistenceState;
 use parking_lot::Mutex;
 use paths::local_settings_folder_relative_path;
 use postage::{
@@ -1313,9 +1314,10 @@ impl LocalWorktree {
                         entry_id: None,
                         worktree,
                         path,
-                        mtime: Some(metadata.mtime),
+                        persistence_state: PersistenceState::Exists {
+                            mtime: metadata.mtime,
+                        },
                         is_local: true,
-                        is_deleted: false,
                         is_private,
                     })
                 }
@@ -1374,9 +1376,10 @@ impl LocalWorktree {
                         entry_id: None,
                         worktree,
                         path,
-                        mtime: Some(metadata.mtime),
+                        persistence_state: PersistenceState::Exists {
+                            mtime: metadata.mtime,
+                        },
                         is_local: true,
-                        is_deleted: false,
                         is_private,
                     })
                 }
@@ -1512,10 +1515,11 @@ impl LocalWorktree {
                 Ok(Arc::new(File {
                     worktree,
                     path,
-                    mtime: Some(metadata.mtime),
+                    persistence_state: PersistenceState::Exists {
+                        mtime: metadata.mtime,
+                    },
                     entry_id: None,
                     is_local: true,
-                    is_deleted: false,
                     is_private,
                 }))
             }
@@ -3178,10 +3182,9 @@ impl fmt::Debug for Snapshot {
 pub struct File {
     pub worktree: Model<Worktree>,
     pub path: Arc<Path>,
-    pub mtime: Option<SystemTime>,
+    pub persistence_state: PersistenceState,
     pub entry_id: Option<ProjectEntryId>,
     pub is_local: bool,
-    pub is_deleted: bool,
     pub is_private: bool,
 }
 
@@ -3194,8 +3197,8 @@ impl language::File for File {
         }
     }
 
-    fn mtime(&self) -> Option<SystemTime> {
-        self.mtime
+    fn persistence_state(&self) -> PersistenceState {
+        self.persistence_state
     }
 
     fn path(&self) -> &Arc<Path> {
@@ -3238,10 +3241,6 @@ impl language::File for File {
         self.worktree.read(cx).id()
     }
 
-    fn is_deleted(&self) -> bool {
-        self.is_deleted
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -3251,8 +3250,26 @@ impl language::File for File {
             worktree_id: self.worktree.read(cx).id().to_proto(),
             entry_id: self.entry_id.map(|id| id.to_proto()),
             path: self.path.to_string_lossy().into(),
-            mtime: self.mtime.map(|time| time.into()),
-            is_deleted: self.is_deleted,
+            mtime: self.mtime().map(|time| time.into()),
+            is_deleted: match self.persistence_state {
+                PersistenceState::Deleted { .. } => true,
+                _ => false,
+            },
+            persistence_state: Some(match self.persistence_state {
+                PersistenceState::New => {
+                    rpc::proto::file::PersistenceState::New(rpc::proto::file::New {})
+                }
+                PersistenceState::Exists { mtime } => {
+                    rpc::proto::file::PersistenceState::Exists(rpc::proto::file::Exists {
+                        mtime: Some(mtime.into()),
+                    })
+                }
+                PersistenceState::Deleted { mtime } => {
+                    rpc::proto::file::PersistenceState::Deleted(rpc::proto::file::Deleted {
+                        mtime: Some(mtime.into()),
+                    })
+                }
+            }),
         }
     }
 
@@ -3293,10 +3310,13 @@ impl File {
         Arc::new(Self {
             worktree,
             path: entry.path.clone(),
-            mtime: entry.mtime,
+            persistence_state: if let Some(mtime) = entry.mtime {
+                PersistenceState::Exists { mtime }
+            } else {
+                PersistenceState::New
+            },
             entry_id: Some(entry.id),
             is_local: true,
-            is_deleted: false,
             is_private: entry.is_private,
         })
     }
@@ -3316,13 +3336,37 @@ impl File {
             return Err(anyhow!("worktree id does not match file"));
         }
 
+        let persistence_state = if let Some(proto_persistence_state) = proto.persistence_state {
+            match proto_persistence_state {
+                rpc::proto::file::PersistenceState::New(rpc::proto::file::New {}) => {
+                    PersistenceState::New
+                }
+                rpc::proto::file::PersistenceState::Exists(rpc::proto::file::Exists { mtime }) => {
+                    PersistenceState::new_exists(mtime.map(&Into::into))
+                }
+                rpc::proto::file::PersistenceState::Deleted(rpc::proto::file::Deleted {
+                    mtime,
+                }) => PersistenceState::new_deleted(mtime.map(&Into::into)),
+            }
+        } else {
+            let mtime = proto.mtime.map(&Into::into);
+            if proto.is_deleted {
+                PersistenceState::new_deleted(mtime)
+            } else {
+                if let Some(mtime) = mtime {
+                    PersistenceState::Exists { mtime }
+                } else {
+                    PersistenceState::New
+                }
+            }
+        };
+
         Ok(Self {
             worktree,
             path: Path::new(&proto.path).into(),
-            mtime: proto.mtime.map(|time| time.into()),
+            persistence_state,
             entry_id: proto.entry_id.map(ProjectEntryId::from_proto),
             is_local: false,
-            is_deleted: proto.is_deleted,
             is_private: false,
         })
     }
@@ -3336,11 +3380,14 @@ impl File {
     }
 
     pub fn project_entry_id(&self, _: &AppContext) -> Option<ProjectEntryId> {
-        if self.is_deleted {
-            None
-        } else {
-            self.entry_id
+        self.entry_id
+        /*
+        match self.persistence_state {
+            // FIXME: why?
+            PersistenceState::Deleted { .. } => None,
+            _ => self.entry_id,
         }
+        */
     }
 }
 

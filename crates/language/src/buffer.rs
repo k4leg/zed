@@ -107,6 +107,7 @@ pub struct Buffer {
     file: Option<Arc<dyn File>>,
     /// The mtime of the file when this buffer was last loaded from
     /// or saved to disk.
+    // FIXME: use file.mtime?
     saved_mtime: Option<SystemTime>,
     /// The version vector when this buffer was last loaded from
     /// or saved to disk.
@@ -371,8 +372,19 @@ pub trait File: Send + Sync {
         self.as_local().is_some()
     }
 
-    /// Returns the file's mtime.
-    fn mtime(&self) -> Option<SystemTime>;
+    /// Returns the file's persistence state - whether it is new, exists in storage, or has been
+    /// deleted.
+    fn persistence_state(&self) -> PersistenceState;
+
+    /// Returns the file's last known modification time. If the file on disk has a time that differs
+    /// from this, then it has been externally modified.
+    fn mtime(&self) -> Option<SystemTime> {
+        match self.persistence_state() {
+            PersistenceState::New => None,
+            PersistenceState::Exists { mtime } => Some(mtime),
+            PersistenceState::Deleted { mtime } => Some(mtime),
+        }
+    }
 
     /// Returns the path of this file relative to the worktree's root directory.
     fn path(&self) -> &Arc<Path>;
@@ -390,10 +402,7 @@ pub trait File: Send + Sync {
     /// This is needed for looking up project-specific settings.
     fn worktree_id(&self, cx: &AppContext) -> WorktreeId;
 
-    /// Returns whether the file has been deleted.
-    fn is_deleted(&self) -> bool;
-
-    /// Returns whether the file existed on disk at one point
+    /// Returns whether the file was on disk at some point in the past.
     fn is_created(&self) -> bool {
         self.mtime().is_some()
     }
@@ -406,6 +415,50 @@ pub trait File: Send + Sync {
 
     /// Return whether Zed considers this to be a private file.
     fn is_private(&self) -> bool;
+}
+
+/// State of file persistence. `New` and `Deleted` are quite similar as they both correspond to a
+/// file that is not currently stored. In the UI these states are distinguished. For example, the
+/// buffer tab does not display a deletion indicator for new files.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PersistenceState {
+    /// Initial state for new files that have not yet been saved.
+    New,
+    /// State for files that have been saved.
+    Exists { mtime: SystemTime },
+    /// State for files that were saved in the past but have since been deleted. This state is not
+    /// permanent, as files may reappear due to being saved or due to external writes.
+    Deleted {
+        /// Modification time is present even when the file has been deleted, as the file may
+        /// reappear with the same modification time it had before.
+        mtime: SystemTime,
+    },
+}
+
+impl PersistenceState {
+    #[track_caller]
+    pub fn new_exists(mtime: Option<SystemTime>) -> PersistenceState {
+        if let Some(mtime) = mtime {
+            Self::Exists { mtime }
+        } else {
+            log::error!("Attempted to make PersistenceState::Exists without a modification time, so using a bogus value.");
+            Self::Exists {
+                mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(42),
+            }
+        }
+    }
+
+    #[track_caller]
+    pub fn new_deleted(mtime: Option<SystemTime>) -> PersistenceState {
+        if let Some(mtime) = mtime {
+            Self::Deleted { mtime }
+        } else {
+            log::error!("Attempted to make PersistenceState::Deleted without a modification time, so using a bogus value.");
+            Self::Deleted {
+                mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(42),
+            }
+        }
+    }
 }
 
 /// The file associated with a buffer, in the case where the file is on the local disk.
@@ -1077,20 +1130,13 @@ impl Buffer {
                 file_changed = true;
             }
 
-            if new_file.is_deleted() {
-                if !old_file.is_deleted() {
-                    file_changed = true;
-                    if !self.is_dirty() {
-                        cx.emit(BufferEvent::DirtyChanged);
-                    }
-                }
-            } else {
-                let new_mtime = new_file.mtime();
-                if new_mtime != old_file.mtime() {
-                    file_changed = true;
-
-                    if !self.is_dirty() {
+            if new_file.persistence_state() != old_file.persistence_state() {
+                file_changed = true;
+                if !self.is_dirty() {
+                    if let PersistenceState::Exists { .. } = new_file.persistence_state() {
                         cx.emit(BufferEvent::ReloadNeeded);
+                    } else {
+                        cx.emit(BufferEvent::DirtyChanged);
                     }
                 }
             }
@@ -1746,7 +1792,10 @@ impl Buffer {
                 || self
                     .file
                     .as_ref()
-                    .map_or(false, |file| file.is_deleted() || !file.is_created()))
+                    .map_or(false, |file| match file.persistence_state() {
+                        PersistenceState::New | PersistenceState::Deleted { .. } => true,
+                        PersistenceState::Exists { .. } => false,
+                    }))
     }
 
     /// Checks if the buffer and its file have both changed since the buffer
@@ -4408,10 +4457,6 @@ impl File for TestFile {
         WorktreeId::from_usize(0)
     }
 
-    fn is_deleted(&self) -> bool {
-        unimplemented!()
-    }
-
     fn as_any(&self) -> &dyn std::any::Any {
         unimplemented!()
     }
@@ -4422,6 +4467,10 @@ impl File for TestFile {
 
     fn is_private(&self) -> bool {
         false
+    }
+
+    fn persistence_state(&self) -> PersistenceState {
+        unimplemented!()
     }
 }
 

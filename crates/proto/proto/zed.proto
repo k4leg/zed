@@ -1741,8 +1741,23 @@ message File {
     uint64 worktree_id = 1;
     optional uint64 entry_id = 2;
     string path = 3;
+    // Deprecated in favor of persistence_state
     Timestamp mtime = 4;
+    // Deprecated in favor of persistence_state
     bool is_deleted = 5;
+    oneof persistence_state {
+        New new = 6;
+        Exists exists = 7;
+        Deleted deleted = 8;
+    }
+
+    message New {}
+    message Exists {
+        Timestamp mtime = 1;
+    }
+    message Deleted {
+        Timestamp mtime = 1;
+    }
 }
 
 message Entry {

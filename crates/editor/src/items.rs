@@ -16,7 +16,8 @@ use gpui::{
     VisualContext, WeakView, WindowContext,
 };
 use language::{
-    proto::serialize_anchor as serialize_text_anchor, Bias, Buffer, CharKind, Point, SelectionGoal,
+    proto::serialize_anchor as serialize_text_anchor, Bias, Buffer, CharKind, PersistenceState,
+    Point, SelectionGoal,
 };
 use lsp::DiagnosticSeverity;
 use multi_buffer::AnchorRangeExt;

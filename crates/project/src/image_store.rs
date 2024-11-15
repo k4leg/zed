@@ -9,7 +9,7 @@ use gpui::{
     hash, prelude::*, AppContext, EventEmitter, Img, Model, ModelContext, Subscription, Task,
     WeakModel,
 };
-use language::File;
+use language::{File, PersistenceState};
 use rpc::{AnyProtoClient, ErrorExt as _};
 use std::ffi::OsStr;
 use std::num::NonZeroU64;
@@ -74,10 +74,9 @@ impl ImageItem {
             file_changed = true;
         }
 
-        if !new_file.is_deleted() {
-            let new_mtime = new_file.mtime();
-            if new_mtime != old_file.mtime() {
-                file_changed = true;
+        if new_file.persistence_state() != old_file.persistence_state() {
+            file_changed = true;
+            if let PersistenceState::Exists { .. } = new_file.persistence_state() {
                 cx.emit(ImageItemEvent::ReloadNeeded);
             }
         }
@@ -497,44 +496,47 @@ impl LocalImageStore {
 
         image.update(cx, |image, cx| {
             let Some(old_file) = worktree::File::from_dyn(Some(&image.file)) else {
+                // FIXME: stuck?
                 return;
             };
             if old_file.worktree != *worktree {
+                // FIXME: stuck?
                 return;
             }
 
-            let new_file = if let Some(entry) = old_file
+            let snapshot_entry = old_file
                 .entry_id
                 .and_then(|entry_id| snapshot.entry_for_id(entry_id))
-            {
+                .or_else(|| snapshot.entry_for_path(old_file.path.as_ref()));
+
+            let new_file = if let Some(entry) = snapshot_entry {
                 worktree::File {
                     is_local: true,
-                    entry_id: Some(entry.id),
-                    mtime: entry.mtime,
-                    path: entry.path.clone(),
                     worktree: worktree.clone(),
-                    is_deleted: false,
-                    is_private: entry.is_private,
-                }
-            } else if let Some(entry) = snapshot.entry_for_path(old_file.path.as_ref()) {
-                worktree::File {
-                    is_local: true,
                     entry_id: Some(entry.id),
-                    mtime: entry.mtime,
                     path: entry.path.clone(),
-                    worktree: worktree.clone(),
-                    is_deleted: false,
                     is_private: entry.is_private,
+                    persistence_state: match entry.mtime {
+                        Some(mtime) => PersistenceState::Exists { mtime },
+                        None => match old_file.persistence_state {
+                            PersistenceState::New => PersistenceState::New,
+                            PersistenceState::Exists { mtime } => {
+                                PersistenceState::Deleted { mtime }
+                            }
+                            PersistenceState::Deleted { mtime } => {
+                                PersistenceState::Deleted { mtime }
+                            }
+                        },
+                    },
                 }
             } else {
                 worktree::File {
                     is_local: true,
+                    worktree: worktree.clone(),
                     entry_id: old_file.entry_id,
                     path: old_file.path.clone(),
-                    mtime: old_file.mtime,
-                    worktree: worktree.clone(),
-                    is_deleted: true,
                     is_private: old_file.is_private,
+                    persistence_state: PersistenceState::new_deleted(old_file.mtime()),
                 }
             };
 

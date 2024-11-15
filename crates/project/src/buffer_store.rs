@@ -20,7 +20,7 @@ use language::{
         deserialize_line_ending, deserialize_version, serialize_line_ending, serialize_version,
         split_operations,
     },
-    Buffer, BufferEvent, Capability, File as _, Language, Operation,
+    Buffer, BufferEvent, Capability, File as _, Language, Operation, PersistenceState,
 };
 use rpc::{proto, AnyProtoClient, ErrorExt as _, TypedEnvelope};
 use smol::channel::Receiver;
@@ -444,7 +444,7 @@ impl LocalBufferStore {
 
         cx.spawn(move |this, mut cx| async move {
             let new_file = save.await?;
-            let mtime = new_file.mtime;
+            let mtime = new_file.mtime();
             this.update(&mut cx, |this, cx| {
                 if let Some((downstream_client, project_id)) = this.downstream_client(cx) {
                     if has_changed_file {
@@ -655,41 +655,43 @@ impl LocalBufferStore {
             let file = buffer.file()?;
             let old_file = File::from_dyn(Some(file))?;
             if old_file.worktree != *worktree {
+                // FIXME: stuck?
                 return None;
             }
 
-            let new_file = if let Some(entry) = old_file
+            let snapshot_entry = old_file
                 .entry_id
                 .and_then(|entry_id| snapshot.entry_for_id(entry_id))
-            {
+                .or_else(|| snapshot.entry_for_path(old_file.path.as_ref()));
+
+            let new_file = if let Some(entry) = snapshot_entry {
                 File {
                     is_local: true,
-                    entry_id: Some(entry.id),
-                    mtime: entry.mtime,
-                    path: entry.path.clone(),
                     worktree: worktree.clone(),
-                    is_deleted: false,
-                    is_private: entry.is_private,
-                }
-            } else if let Some(entry) = snapshot.entry_for_path(old_file.path.as_ref()) {
-                File {
-                    is_local: true,
                     entry_id: Some(entry.id),
-                    mtime: entry.mtime,
                     path: entry.path.clone(),
-                    worktree: worktree.clone(),
-                    is_deleted: false,
                     is_private: entry.is_private,
+                    persistence_state: match entry.mtime {
+                        Some(mtime) => PersistenceState::Exists { mtime },
+                        None => match old_file.persistence_state {
+                            PersistenceState::New => PersistenceState::New,
+                            PersistenceState::Exists { mtime } => {
+                                PersistenceState::Deleted { mtime }
+                            }
+                            PersistenceState::Deleted { mtime } => {
+                                PersistenceState::Deleted { mtime }
+                            }
+                        },
+                    },
                 }
             } else {
                 File {
                     is_local: true,
+                    worktree: worktree.clone(),
                     entry_id: old_file.entry_id,
                     path: old_file.path.clone(),
-                    mtime: old_file.mtime,
-                    worktree: worktree.clone(),
-                    is_deleted: true,
                     is_private: old_file.is_private,
+                    persistence_state: PersistenceState::new_deleted(old_file.mtime()),
                 }
             };
 
@@ -867,10 +869,9 @@ impl BufferStoreImpl for Model<LocalBufferStore> {
                             Some(Arc::new(File {
                                 worktree,
                                 path,
-                                mtime: None,
+                                persistence_state: PersistenceState::New,
                                 entry_id: None,
                                 is_local: true,
-                                is_deleted: false,
                                 is_private: false,
                             })),
                             Capability::ReadWrite,

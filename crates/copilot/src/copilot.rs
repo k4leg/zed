@@ -1229,7 +1229,7 @@ mod tests {
             Some(self)
         }
 
-        fn mtime(&self) -> Option<std::time::SystemTime> {
+        fn persistence_state(&self) -> language::PersistenceState {
             unimplemented!()
         }
 
@@ -1242,10 +1242,6 @@ mod tests {
         }
 
         fn file_name<'a>(&'a self, _: &'a AppContext) -> &'a std::ffi::OsStr {
-            unimplemented!()
-        }
-
-        fn is_deleted(&self) -> bool {
             unimplemented!()
         }
 

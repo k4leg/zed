@@ -6,7 +6,8 @@ use http_client::Url;
 use language::{
     language_settings::{language_settings, AllLanguageSettings, LanguageSettingsContent},
     tree_sitter_rust, tree_sitter_typescript, Diagnostic, DiagnosticSet, FakeLspAdapter,
-    LanguageConfig, LanguageMatcher, LanguageName, LineEnding, OffsetRangeExt, Point, ToPoint,
+    LanguageConfig, LanguageMatcher, LanguageName, LineEnding, OffsetRangeExt, PersistenceState,
+    Point, ToPoint,
 };
 use lsp::{DiagnosticSeverity, NumberOrString};
 use parking_lot::Mutex;
@@ -3239,10 +3240,22 @@ async fn test_rescan_and_remote_updates(cx: &mut gpui::TestAppContext) {
             Path::new("b/c/file5")
         );
 
-        assert!(!buffer2.read(cx).file().unwrap().is_deleted());
-        assert!(!buffer3.read(cx).file().unwrap().is_deleted());
-        assert!(!buffer4.read(cx).file().unwrap().is_deleted());
-        assert!(buffer5.read(cx).file().unwrap().is_deleted());
+        assert!(matches!(
+            buffer2.read(cx).file().unwrap().persistence_state(),
+            PersistenceState::Deleted { .. }
+        ));
+        assert!(matches!(
+            buffer3.read(cx).file().unwrap().persistence_state(),
+            PersistenceState::Deleted { .. }
+        ));
+        assert!(matches!(
+            buffer4.read(cx).file().unwrap().persistence_state(),
+            PersistenceState::Deleted { .. }
+        ));
+        assert!(matches!(
+            buffer5.read(cx).file().unwrap().persistence_state(),
+            PersistenceState::Deleted { .. }
+        ));
     });
 
     // Update the remote worktree. Check that it becomes consistent with the
