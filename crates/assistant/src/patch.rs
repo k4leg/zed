@@ -58,11 +58,11 @@ impl PatchStore {
         }));
     }
 
-    pub fn resolve_patch(
+    pub fn create_branch_for_patch(
         &mut self,
         range: Range<text::Anchor>,
         cx: &mut ModelContext<Self>,
-    ) -> Task<Result<ResolvedPatch>> {
+    ) -> Task<Result<AssistantBranch>> {
         let project = self.project.clone();
         let Some(entry) = self.entries.get(&range) else {
             return Task::ready(Err(anyhow!("no patch for the given range")));
@@ -70,7 +70,7 @@ impl PatchStore {
         let patch = entry.patch.clone();
 
         cx.spawn(|_, mut cx| async move {
-            let mut result = ResolvedPatch {
+            let mut result = AssistantBranch {
                 edit_groups: HashMap::default(),
                 errors: Vec::new(),
             };
@@ -79,10 +79,13 @@ impl PatchStore {
                 let buffer =
                     open_buffer_for_edit_path(&project, patch_buffer.path.clone(), &mut cx);
                 if let Some(buffer) = buffer {
-                    let buffer = buffer.await?;
-                    let snapshot = buffer.read_with(&cx, |buffer, _| buffer.text_snapshot())?;
+                    let branch_buffer = buffer
+                        .await?
+                        .update(&mut cx, |buffer, cx| buffer.branch(cx))?;
+                    let snapshot =
+                        branch_buffer.read_with(&cx, |buffer, _| buffer.text_snapshot())?;
 
-                    let diff = buffer
+                    let diff = branch_buffer
                         .update(&mut cx, |buffer, cx| {
                             buffer.diff_rope(&patch_buffer.content, cx)
                         })?
@@ -115,20 +118,47 @@ impl PatchStore {
                         edit.range.start = (edit.range.start as isize + delta) as usize;
                         edit.range.end = (edit.range.end as isize + delta) as usize;
                     }
+                    let grouped_resolved_edits = AssistantPatch::group_edits(
+                        patch_buffer
+                            .edits
+                            .into_iter()
+                            .map(|edit| ResolvedEdit {
+                                range: snapshot.anchor_before(edit.range.start)
+                                    ..snapshot.anchor_after(edit.range.end),
+                                new_text: edit.new_text,
+                                description: edit.description,
+                            })
+                            .collect(),
+                        &snapshot,
+                    );
 
-                    let edits = patch_buffer
-                        .edits
-                        .into_iter()
-                        .map(|edit| ResolvedEdit {
-                            range: snapshot.anchor_before(edit.range.start)
-                                ..snapshot.anchor_after(edit.range.end),
-                            new_text: edit.new_text,
-                            description: edit.description,
-                        })
-                        .collect::<Vec<_>>();
-                    result
-                        .edit_groups
-                        .insert(buffer, AssistantPatch::group_edits(edits, &snapshot));
+                    let mut branch_edit_groups = Vec::new();
+                    for resolved_edit_group in grouped_resolved_edits {
+                        let mut group_branch_edits = BranchEditGroup {
+                            context_range: resolved_edit_group.context_range,
+                            edits: Vec::new(),
+                        };
+                        for edit in resolved_edit_group.edits {
+                            let edit_id = branch_buffer.update(&mut cx, |buffer, cx| {
+                                buffer.edit(
+                                    [(edit.range.clone(), edit.new_text.clone())],
+                                    Some(AutoindentMode::Block {
+                                        original_indent_columns: Vec::new(),
+                                    }),
+                                    cx,
+                                )
+                            })?;
+                            group_branch_edits.edits.push(BranchEdit {
+                                range: edit.range,
+                                new_text: edit.new_text,
+                                description: edit.description,
+                                edit_id,
+                            });
+                        }
+                        branch_edit_groups.push(group_branch_edits);
+                    }
+
+                    result.edit_groups.insert(branch_buffer, branch_edit_groups);
                 }
             }
 
@@ -325,9 +355,48 @@ struct LocatedEdit {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedPatch {
-    pub edit_groups: HashMap<Model<Buffer>, Vec<ResolvedEditGroup>>,
-    pub errors: Vec<AssistantPatchResolutionError>,
+struct ResolvedEdit {
+    range: Range<language::Anchor>,
+    new_text: String,
+    description: Option<String>,
+}
+
+impl ResolvedEdit {
+    pub fn try_merge(&mut self, other: &Self, buffer: &text::BufferSnapshot) -> bool {
+        let range = &self.range;
+        let other_range = &other.range;
+
+        // Don't merge if we don't contain the other suggestion.
+        if range.start.cmp(&other_range.start, buffer).is_gt()
+            || range.end.cmp(&other_range.end, buffer).is_lt()
+        {
+            return false;
+        }
+
+        let other_offset_range = other_range.to_offset(buffer);
+        let offset_range = range.to_offset(buffer);
+
+        // If the other range is empty at the start of this edit's range, combine the new text
+        if other_offset_range.is_empty() && other_offset_range.start == offset_range.start {
+            self.new_text = format!("{}\n{}", other.new_text, self.new_text);
+            self.range.start = other_range.start;
+
+            if let Some((description, other_description)) =
+                self.description.as_mut().zip(other.description.as_ref())
+            {
+                *description = format!("{}\n{}", other_description, description)
+            }
+        } else {
+            if let Some((description, other_description)) =
+                self.description.as_mut().zip(other.description.as_ref())
+            {
+                description.push('\n');
+                description.push_str(other_description);
+            }
+        }
+
+        true
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -337,10 +406,23 @@ pub struct ResolvedEditGroup {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedEdit {
+pub struct AssistantBranch {
+    pub edit_groups: HashMap<Model<Buffer>, Vec<BranchEditGroup>>,
+    pub errors: Vec<AssistantPatchResolutionError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchEditGroup {
+    pub context_range: Range<language::Anchor>,
+    pub edits: Vec<BranchEdit>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchEdit {
     range: Range<language::Anchor>,
     new_text: String,
     description: Option<String>,
+    edit_id: Option<clock::Lamport>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -387,76 +469,6 @@ impl SearchMatrix {
 
     fn set(&mut self, row: usize, col: usize, cost: SearchState) {
         self.data[row * self.cols + col] = cost;
-    }
-}
-
-impl ResolvedPatch {
-    pub fn apply(&self, editor: &ProposedChangesEditor, cx: &mut AppContext) {
-        for (buffer, groups) in &self.edit_groups {
-            let branch = editor.branch_buffer_for_base(buffer).unwrap();
-            Self::apply_edit_groups(groups, &branch, cx);
-        }
-        editor.recalculate_all_buffer_diffs();
-    }
-
-    fn apply_edit_groups(
-        groups: &Vec<ResolvedEditGroup>,
-        buffer: &Model<Buffer>,
-        cx: &mut AppContext,
-    ) {
-        let mut edits = Vec::new();
-        for group in groups {
-            for suggestion in &group.edits {
-                edits.push((suggestion.range.clone(), suggestion.new_text.clone()));
-            }
-        }
-        buffer.update(cx, |buffer, cx| {
-            buffer.edit(
-                edits,
-                Some(AutoindentMode::Block {
-                    original_indent_columns: Vec::new(),
-                }),
-                cx,
-            );
-        });
-    }
-}
-
-impl ResolvedEdit {
-    pub fn try_merge(&mut self, other: &Self, buffer: &text::BufferSnapshot) -> bool {
-        let range = &self.range;
-        let other_range = &other.range;
-
-        // Don't merge if we don't contain the other suggestion.
-        if range.start.cmp(&other_range.start, buffer).is_gt()
-            || range.end.cmp(&other_range.end, buffer).is_lt()
-        {
-            return false;
-        }
-
-        let other_offset_range = other_range.to_offset(buffer);
-        let offset_range = range.to_offset(buffer);
-
-        // If the other range is empty at the start of this edit's range, combine the new text
-        if other_offset_range.is_empty() && other_offset_range.start == offset_range.start {
-            self.new_text = format!("{}\n{}", other.new_text, self.new_text);
-            self.range.start = other_range.start;
-
-            if let Some((description, other_description)) =
-                self.description.as_mut().zip(other.description.as_ref())
-            {
-                *description = format!("{}\n{}", other_description, description)
-            }
-        } else {
-            if let Some((description, other_description)) =
-                self.description.as_mut().zip(other.description.as_ref())
-            {
-                description.push('\n');
-                description.push_str(other_description);
-            }
-        }
-
-        true
     }
 }
 
@@ -531,12 +543,12 @@ impl AssistantEdit {
             .await?;
 
         let snapshot = buffer.update(&mut cx, |buffer, _| buffer.snapshot())?;
-        let suggestion = cx
+        let resolved_edit = cx
             .background_executor()
             .spawn(async move { kind.resolve(&snapshot) })
             .await;
 
-        Ok((buffer, suggestion))
+        Ok((buffer, resolved_edit))
     }
 }
 
@@ -759,50 +771,50 @@ impl AssistantEditKind {
 }
 
 impl AssistantPatch {
-    pub(crate) async fn resolve(
-        &self,
-        project: Model<Project>,
-        cx: &mut AsyncAppContext,
-    ) -> ResolvedPatch {
-        let mut resolve_tasks = Vec::new();
-        for (ix, edit) in self.edits.iter().enumerate() {
-            resolve_tasks.push(
-                edit.resolve(project.clone(), cx.clone())
-                    .map_err(move |error| (ix, error)),
-            );
-        }
+    // pub(crate) async fn resolve(
+    //     &self,
+    //     project: Model<Project>,
+    //     cx: &mut AsyncAppContext,
+    // ) -> AssistantBranch {
+    //     let mut resolve_tasks = Vec::new();
+    //     for (ix, edit) in self.edits.iter().enumerate() {
+    //         resolve_tasks.push(
+    //             edit.resolve(project.clone(), cx.clone())
+    //                 .map_err(move |error| (ix, error)),
+    //         );
+    //     }
 
-        let edits = future::join_all(resolve_tasks).await;
-        let mut errors = Vec::new();
-        let mut edits_by_buffer = HashMap::default();
-        for entry in edits {
-            match entry {
-                Ok((buffer, edit)) => {
-                    edits_by_buffer
-                        .entry(buffer)
-                        .or_insert_with(Vec::new)
-                        .push(edit);
-                }
-                Err((edit_ix, error)) => errors.push(AssistantPatchResolutionError {
-                    edit_ix,
-                    message: error.to_string(),
-                }),
-            }
-        }
+    //     let edits = future::join_all(resolve_tasks).await;
+    //     let mut errors = Vec::new();
+    //     let mut edits_by_buffer = HashMap::default();
+    //     for entry in edits {
+    //         match entry {
+    //             Ok((buffer, edit)) => {
+    //                 edits_by_buffer
+    //                     .entry(buffer)
+    //                     .or_insert_with(Vec::new)
+    //                     .push(edit);
+    //             }
+    //             Err((edit_ix, error)) => errors.push(AssistantPatchResolutionError {
+    //                 edit_ix,
+    //                 message: error.to_string(),
+    //             }),
+    //         }
+    //     }
 
-        // Expand the context ranges of each edit and group edits with overlapping context ranges.
-        let mut edit_groups_by_buffer = HashMap::default();
-        for (buffer, edits) in edits_by_buffer {
-            if let Ok(snapshot) = buffer.update(cx, |buffer, _| buffer.text_snapshot()) {
-                edit_groups_by_buffer.insert(buffer, Self::group_edits(edits, &snapshot));
-            }
-        }
+    //     // Expand the context ranges of each edit and group edits with overlapping context ranges.
+    //     let mut edit_groups_by_buffer = HashMap::default();
+    //     for (buffer, edits) in edits_by_buffer {
+    //         if let Ok(snapshot) = buffer.update(cx, |buffer, _| buffer.text_snapshot()) {
+    //             edit_groups_by_buffer.insert(buffer, Self::group_edits(edits, &snapshot));
+    //         }
+    //     }
 
-        ResolvedPatch {
-            edit_groups: edit_groups_by_buffer,
-            errors,
-        }
-    }
+    //     AssistantBranch {
+    //         edit_groups: edit_groups_by_buffer,
+    //         errors,
+    //     }
+    // }
 
     fn group_edits(
         mut edits: Vec<ResolvedEdit>,
@@ -887,12 +899,9 @@ mod tests {
     use super::*;
     use fs::FakeFs;
     use gpui::{AppContext, Context, TestAppContext};
-    use language::{
-        language_settings::AllLanguageSettings, Language, LanguageConfig, LanguageMatcher,
-    };
+    use language::{Language, LanguageConfig, LanguageMatcher};
     use serde_json::json;
     use settings::SettingsStore;
-    use ui::BorrowAppContext;
     use unindent::Unindent as _;
     use util::test::{generate_marked_text, marked_text_ranges};
 
@@ -960,12 +969,14 @@ mod tests {
         });
 
         cx.run_until_parked();
-        let patch = patch_store
-            .update(cx, |store, cx| store.resolve_patch(range.clone(), cx))
+        let branch = patch_store
+            .update(cx, |store, cx| {
+                store.create_branch_for_patch(range.clone(), cx)
+            })
             .await
             .unwrap();
-        assert_apply_patch(
-            &patch,
+        assert_assistant_branch(
+            &branch,
             cx,
             &[(
                 Path::new("src/lib.rs").into(),
@@ -1016,10 +1027,12 @@ mod tests {
 
         cx.run_until_parked();
         let patch = patch_store
-            .update(cx, |store, cx| store.resolve_patch(range.clone(), cx))
+            .update(cx, |store, cx| {
+                store.create_branch_for_patch(range.clone(), cx)
+            })
             .await
             .unwrap();
-        assert_apply_patch(
+        assert_assistant_branch(
             &patch,
             cx,
             &[(
@@ -1041,19 +1054,17 @@ mod tests {
     }
 
     #[track_caller]
-    fn assert_apply_patch(
-        patch: &ResolvedPatch,
+    fn assert_assistant_branch(
+        branch: &AssistantBranch,
         cx: &mut TestAppContext,
         expected_output: &[(Arc<Path>, String)],
     ) {
         let mut actual_output = Vec::new();
-        for (buffer, edit_groups) in &patch.edit_groups {
-            let branch = buffer.update(cx, |buffer, cx| buffer.branch(cx));
+        for (buffer, _) in &branch.edit_groups {
             cx.update(|cx| {
-                ResolvedPatch::apply_edit_groups(edit_groups, &branch, cx);
                 actual_output.push((
                     buffer.read(cx).file().unwrap().path().clone(),
-                    branch.read(cx).text(),
+                    buffer.read(cx).text(),
                 ));
             });
         }
@@ -1132,8 +1143,11 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_resolve_edits(cx: &mut AppContext) {
-        init_test(cx);
+    async fn test_resolve_edits(cx: &mut TestAppContext) {
+        let settings_store = cx.update(SettingsStore::test);
+        cx.set_global(settings_store);
+        cx.update(language::init);
+        cx.update(Project::init_settings);
 
         assert_edits(
             "
@@ -1205,7 +1219,8 @@ mod tests {
             "
             .unindent(),
             cx,
-        );
+        )
+        .await;
 
         // Ensure InsertBefore merges correctly with Update of the same text
         assert_edits(
@@ -1271,7 +1286,8 @@ mod tests {
             "
             .unindent(),
             cx,
-        );
+        )
+        .await;
 
         // Correctly indent new text when replacing multiple adjacent indented blocks.
         assert_edits(
@@ -1355,7 +1371,8 @@ mod tests {
             "
             .unindent(),
             cx,
-        );
+        )
+        .await;
 
         assert_edits(
             "
@@ -1395,16 +1412,8 @@ mod tests {
             "
             .unindent(),
             cx,
-        );
-    }
-
-    fn init_test(cx: &mut AppContext) {
-        let settings_store = SettingsStore::test(cx);
-        cx.set_global(settings_store);
-        language::init(cx);
-        cx.update_global::<SettingsStore, _>(|settings, cx| {
-            settings.update_user_settings::<AllLanguageSettings>(cx, |_| {});
-        });
+        )
+        .await;
     }
 
     #[track_caller]
@@ -1422,24 +1431,49 @@ mod tests {
         pretty_assertions::assert_eq!(text_with_actual_range, text_with_expected_range);
     }
 
-    #[track_caller]
-    fn assert_edits(
+    async fn assert_edits(
         old_text: String,
         edits: Vec<AssistantEditKind>,
         new_text: String,
-        cx: &mut AppContext,
+        cx: &mut gpui::TestAppContext,
     ) {
-        let buffer =
-            cx.new_model(|cx| Buffer::local(old_text, cx).with_language(Arc::new(rust_lang()), cx));
-        let snapshot = buffer.read(cx).snapshot();
-        let resolved_edits = edits
-            .into_iter()
-            .map(|kind| kind.resolve(&snapshot))
-            .collect();
-        let edit_groups = AssistantPatch::group_edits(resolved_edits, &snapshot);
-        ResolvedPatch::apply_edit_groups(&edit_groups, &buffer, cx);
-        let actual_new_text = buffer.read(cx).text();
-        pretty_assertions::assert_eq!(actual_new_text, new_text);
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree("/root", json!({"file.rs": old_text})).await;
+        let project = Project::test(fs, [Path::new("/root")], cx).await;
+        project.update(cx, |project, _| {
+            project.languages().add(Arc::new(rust_lang()));
+        });
+        let patch_store = cx.new_model(|_| PatchStore::new(project));
+        let patch_range = language::Anchor::MIN..language::Anchor::MAX;
+        patch_store.update(cx, |patch_store, cx| {
+            patch_store.insert(
+                AssistantPatch {
+                    range: patch_range.clone(),
+                    title: "test-patch".into(),
+                    edits: edits
+                        .into_iter()
+                        .map(|kind| AssistantEdit {
+                            path: "file.rs".into(),
+                            kind,
+                        })
+                        .collect(),
+                    status: AssistantPatchStatus::Ready,
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        let branch = patch_store
+            .update(cx, |patch_store, cx| {
+                patch_store.create_branch_for_patch(patch_range, cx)
+            })
+            .await
+            .unwrap();
+        let branch_buffer = branch.edit_groups.keys().next().unwrap();
+        pretty_assertions::assert_eq!(
+            branch_buffer.read_with(cx, |buffer, _| buffer.text()),
+            new_text
+        );
     }
 
     fn rust_lang() -> Language {

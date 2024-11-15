@@ -2490,45 +2490,45 @@ impl ContextEditor {
         patch: AssistantPatch,
         mut cx: AsyncWindowContext,
     ) -> Result<()> {
-        let project = this.update(&mut cx, |this, _| this.project.clone())?;
-        let resolved_patch = patch.resolve(project.clone(), &mut cx).await;
+        // let project = this.update(&mut cx, |this, _| this.project.clone())?;
+        // let resolved_patch = patch.resolve(project.clone(), &mut cx).await;
 
-        let editor = cx.new_view(|cx| {
-            let editor = ProposedChangesEditor::new(
-                patch.title.clone(),
-                resolved_patch
-                    .edit_groups
-                    .iter()
-                    .map(|(buffer, groups)| ProposedChangeLocation {
-                        buffer: buffer.clone(),
-                        ranges: groups
-                            .iter()
-                            .map(|group| group.context_range.clone())
-                            .collect(),
-                    })
-                    .collect(),
-                Some(project.clone()),
-                cx,
-            );
-            resolved_patch.apply(&editor, cx);
-            editor
-        })?;
+        // let editor = cx.new_view(|cx| {
+        //     let editor = ProposedChangesEditor::new(
+        //         patch.title.clone(),
+        //         resolved_patch
+        //             .edit_groups
+        //             .iter()
+        //             .map(|(buffer, groups)| ProposedChangeLocation {
+        //                 buffer: buffer.clone(),
+        //                 ranges: groups
+        //                     .iter()
+        //                     .map(|group| group.context_range.clone())
+        //                     .collect(),
+        //             })
+        //             .collect(),
+        //         Some(project.clone()),
+        //         cx,
+        //     );
+        //     resolved_patch.apply(&editor, cx);
+        //     editor
+        // })?;
 
-        this.update(&mut cx, |this, cx| {
-            if let Some(patch_state) = this.patches.get_mut(&patch.range) {
-                patch_state.editor = Some(PatchEditorState {
-                    editor: editor.downgrade(),
-                    opened_patch: patch,
-                });
-                patch_state.update_task.take();
-            }
+        // this.update(&mut cx, |this, cx| {
+        //     if let Some(patch_state) = this.patches.get_mut(&patch.range) {
+        //         patch_state.editor = Some(PatchEditorState {
+        //             editor: editor.downgrade(),
+        //             opened_patch: patch,
+        //         });
+        //         patch_state.update_task.take();
+        //     }
 
-            this.workspace
-                .update(cx, |workspace, cx| {
-                    workspace.add_item_to_active_pane(Box::new(editor.clone()), None, false, cx)
-                })
-                .log_err();
-        })?;
+        //     this.workspace
+        //         .update(cx, |workspace, cx| {
+        //             workspace.add_item_to_active_pane(Box::new(editor.clone()), None, false, cx)
+        //         })
+        //         .log_err();
+        // })?;
 
         Ok(())
     }
@@ -2538,40 +2538,40 @@ impl ContextEditor {
         patch: AssistantPatch,
         mut cx: AsyncWindowContext,
     ) -> Result<()> {
-        let project = this.update(&mut cx, |this, _| this.project.clone())?;
-        let resolved_patch = patch.resolve(project.clone(), &mut cx).await;
-        this.update(&mut cx, |this, cx| {
-            let patch_state = this.patches.get_mut(&patch.range)?;
+        // let project = this.update(&mut cx, |this, _| this.project.clone())?;
+        // let resolved_patch = patch.resolve(project.clone(), &mut cx).await;
+        // this.update(&mut cx, |this, cx| {
+        //     let patch_state = this.patches.get_mut(&patch.range)?;
 
-            let locations = resolved_patch
-                .edit_groups
-                .iter()
-                .map(|(buffer, groups)| ProposedChangeLocation {
-                    buffer: buffer.clone(),
-                    ranges: groups
-                        .iter()
-                        .map(|group| group.context_range.clone())
-                        .collect(),
-                })
-                .collect();
+        //     let locations = resolved_patch
+        //         .edit_groups
+        //         .iter()
+        //         .map(|(buffer, groups)| ProposedChangeLocation {
+        //             buffer: buffer.clone(),
+        //             ranges: groups
+        //                 .iter()
+        //                 .map(|group| group.context_range.clone())
+        //                 .collect(),
+        //         })
+        //         .collect();
 
-            if let Some(state) = &mut patch_state.editor {
-                if let Some(editor) = state.editor.upgrade() {
-                    editor.update(cx, |editor, cx| {
-                        editor.set_title(patch.title.clone(), cx);
-                        editor.reset_locations(locations, cx);
-                        resolved_patch.apply(editor, cx);
-                    });
+        //     if let Some(state) = &mut patch_state.editor {
+        //         if let Some(editor) = state.editor.upgrade() {
+        //             editor.update(cx, |editor, cx| {
+        //                 editor.set_title(patch.title.clone(), cx);
+        //                 editor.reset_locations(locations, cx);
+        //                 resolved_patch.apply(editor, cx);
+        //             });
 
-                    state.opened_patch = patch;
-                } else {
-                    patch_state.editor.take();
-                }
-            }
-            patch_state.update_task.take();
+        //             state.opened_patch = patch;
+        //         } else {
+        //             patch_state.editor.take();
+        //         }
+        //     }
+        //     patch_state.update_task.take();
 
-            Some(())
-        })?;
+        //     Some(())
+        // })?;
         Ok(())
     }
 
